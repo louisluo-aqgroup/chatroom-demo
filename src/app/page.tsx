@@ -1,6 +1,6 @@
 'use client';
 
-import { useSocket } from '@/providers/SocketProvider';
+import { useSocket } from '@/providers/socket';
 import Login from '@/components/login';
 
 export default function Home() {
