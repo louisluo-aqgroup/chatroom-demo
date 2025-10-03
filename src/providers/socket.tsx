@@ -24,6 +24,7 @@ export const SocketProvider = ({ children }: { children: React.ReactNode }) => {
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user: User | null) => {
+      
       if (socketRef.current) {
         socketRef.current.off("connect");
         socketRef.current.off("disconnect");
@@ -32,12 +33,10 @@ export const SocketProvider = ({ children }: { children: React.ReactNode }) => {
         socketRef.current = null;
         setIsConnected(false);
       }
-      // 如果用戶已登入，建立新的 socket 連線
+  
       if (user) {
         try {
-          // 取得 Firebase ID Token
           const token = await user.getIdToken();
-
           socketRef.current = io(socketUrl, {
             auth: {
               token,
