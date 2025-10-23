@@ -71,6 +71,43 @@ export const useRecordVoice = () => {
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const chunksRef = useRef<Blob[]>([]);
 
+    const stopStreamTracks = useCallback((stream?: MediaStream | null) => {
+        if (!stream) return;
+        stream.getTracks().forEach(track => {
+            try {
+                if (track.readyState === 'live') {
+                    track.stop();
+                }
+            } catch {
+                // ignore stop errors
+            }
+        });
+    }, []);
+
+    // 關閉所有音訊 tracks，確保瀏覽器釋放麥克風權限
+    const releaseStream = useCallback(
+        (stream?: MediaStream | null) => {
+       
+            stopStreamTracks(stream);
+            stopStreamTracks(streamRef.current);
+
+            streamRef.current = null;
+
+            const recorder = mediaRecorderRef.current;
+            if (recorder?.stream) {
+                stopStreamTracks(recorder.stream);
+            }
+
+            if (recorder) {
+                recorder.ondataavailable = null;
+                recorder.onstop = null;
+            }
+
+            mediaRecorderRef.current = null;
+        },
+        [stopStreamTracks],
+    );
+
     // 使用抽離的計時器 hook
     const { seconds, startTimer, clearTimer, resetTimer } = useTimer({
         maxSeconds: 60,
@@ -104,6 +141,9 @@ export const useRecordVoice = () => {
         if (!ok) return;
 
         try {
+            // 確保沒有殘留的錄音資源
+            releaseStream();
+
             const stream = await navigator.mediaDevices.getUserMedia({
                 audio: true,
             });
@@ -129,6 +169,7 @@ export const useRecordVoice = () => {
                 const url = URL.createObjectURL(blob);
                 setAudioBlob(blob);
                 setAudioUrl(url);
+                releaseStream(stream);
                 setState('stopped');
             };
 
@@ -140,26 +181,25 @@ export const useRecordVoice = () => {
             console.error('Failed to start recording:', error);
             setState('disabled');
         }
-    }, [checkPermission, startTimer]);
+    }, [checkPermission, releaseStream, startTimer]);
 
     const stop = useCallback(() => {
-        // 停止 MediaRecorder
-        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-            mediaRecorderRef.current.stop();
+        const recorder = mediaRecorderRef.current;
+        if (recorder) {
+            if (recorder.state !== 'inactive') {
+                recorder.stop();
+            } else {
+                releaseStream();
+                setState(prev => (prev === 'recording' ? 'stopped' : prev));
+            }
+        } else {
+            releaseStream();
+            setState(prev => (prev === 'recording' ? 'stopped' : prev));
         }
 
         // 停止計時器
         clearTimer();
-
-        // 關閉 MediaStream tracks
-        if (streamRef.current) {
-            streamRef.current.getTracks().forEach(track => {
-                track.stop();
-            });
-        }
-        streamRef.current = null;
-        mediaRecorderRef.current = null;
-    }, [clearTimer]);
+    }, [clearTimer, releaseStream]);
 
     const reset = useCallback(() => {
         // 清理現有的 URL
@@ -175,19 +215,23 @@ export const useRecordVoice = () => {
         resetTimer();
 
         // 清理 stream 和 recorder
-        if (mediaRecorderRef.current) {
-            mediaRecorderRef.current = null;
-        }
-        if (streamRef.current) {
-            streamRef.current.getTracks().forEach(track => track.stop());
-            streamRef.current = null;
-        }
-    }, [audioUrl, resetTimer]);
+        releaseStream();
+    }, [audioUrl, releaseStream, resetTimer]);
 
     // 開啟時自動開始錄音
     useEffect(() => {
-        start();
-    }, [start]);
+        let cancelled = false;
+        const timer = window.setTimeout(() => {
+            if (cancelled) return;
+            start();
+        }, 0);
+
+        return () => {
+            cancelled = true;
+            window.clearTimeout(timer);
+            releaseStream();
+        };
+    }, [releaseStream, start]);
 
     // 卸載時清理
     useEffect(() => {
@@ -195,11 +239,9 @@ export const useRecordVoice = () => {
             if (audioUrl) {
                 URL.revokeObjectURL(audioUrl);
             }
-            if (streamRef.current) {
-                streamRef.current.getTracks().forEach(track => track.stop());
-            }
+            releaseStream();
         };
-    }, [audioUrl]);
+    }, [audioUrl, releaseStream]);
 
     return {
         state,
